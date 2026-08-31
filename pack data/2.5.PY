@@ -224,9 +224,10 @@ class ExcelSearchApp:
             if df_move.shape[1] < 5:
                 raise ValueError("The 'move task' sheet must contain at least five columns.")
             df_move.columns = ["Order", "SKU", "Qty", "Container", "Description"]
-            xls = pd.ExcelFile(temp_path)
-            names = xls.sheet_names
+            with pd.ExcelFile(temp_path) as xls:
+                names = xls.sheet_names
             order_sheet = next((n for n in names if n.strip().lower() == "order header"), None)
+            order_sheet = order_sheet or next((n for n in names if n.strip().lower() == "order hedear"), None)
             order_sheet = order_sheet or next((n for n in names if "order" in n.strip().lower() and "header" in n.strip().lower()), None)
             order_sheet = order_sheet or next((n for n in names if "order" in n.strip().lower()), None)
             order_sheet = order_sheet or names[0]
@@ -263,7 +264,7 @@ class ExcelSearchApp:
     def przygotuj_wynik(df_filtered, df_order):
         grouped = df_filtered.groupby(["Order", "SKU", "Container", "Description"], as_index=False)["Qty"].sum()
         final = pd.merge(grouped, df_order, left_on="Order", right_on="A_Order", how="left")
-        final["PO"] = final["PO"].apply(lambda value: "No Data" if pd.isna(value) or str(value).strip().lower() in {"", "nan", "none"} else str(value).strip())
+        final["PO"] = final["PO"].apply(lambda value: "0" if pd.isna(value) or str(value).strip().lower() in {"", "nan", "none"} else str(value).strip())
         return final
 
     def wyswietl_i_zapisz(self, df_filtered, df_order):
@@ -272,16 +273,22 @@ class ExcelSearchApp:
         self.tree.delete(*self.tree.get_children())
         for index, (_, row) in enumerate(final.iterrows()):
             tags = ["even"] if index % 2 else []
-            if row["PO"] == "No Data":
+            if row["PO"] == "0":
                 tags.append("missing_po")
             self.tree.insert("", tk.END, values=(row["Order"], row["SKU"], int(row["Qty"]),
                              row["Container"], row["Description"], row["PO"]), tags=tags)
         self._set_empty_state(None if len(final) else "Container not found")
-        self.set_status(f"{len(final)} rows found", len(final))
+        self.set_status("Search completed", len(final))
 
     def _start_search(self, container, all_for_order=False):
         if self.busy:
             return
+
+        # Clear previous results before starting a new lookup so stale data cannot be printed.
+        self.current_data = pd.DataFrame()
+        self.tree.delete(*self.tree.get_children())
+        self._set_empty_state(None)
+
         if not container:
             self._set_empty_state("Enter a container number to search")
             self.set_status("Enter a container number")
@@ -316,6 +323,9 @@ class ExcelSearchApp:
             self._set_busy(False)
 
     def _search_error(self, error):
+        self.current_data = pd.DataFrame()
+        self.tree.delete(*self.tree.get_children())
+        self._set_empty_state("Unable to load data")
         self._set_busy(False)
         self.set_status("Excel error")
         messagebox.showerror("Excel error", str(error))
