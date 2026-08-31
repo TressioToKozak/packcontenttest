@@ -1,0 +1,99 @@
+name: Apply pack content fixes
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-pack-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch pack application
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("pack data/2.5.PY")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f"Expected code not found: {label}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '            xls = pd.ExcelFile(temp_path)\n            names = xls.sheet_names',
+              '            with pd.ExcelFile(temp_path) as xls:\n                names = xls.sheet_names',
+              'close ExcelFile',
+          )
+
+          replace_once(
+              '            order_sheet = next((n for n in names if n.strip().lower() == "order header"), None)\n',
+              '            order_sheet = next((n for n in names if n.strip().lower() == "order header"), None)\n'
+              '            order_sheet = order_sheet or next((n for n in names if n.strip().lower() == "order hedear"), None)\n',
+              'Order hedear fallback',
+          )
+
+          text = text.replace('"No Data"', '"0"')
+
+          replace_once(
+              '        self.set_status(f"{len(final)} rows found", len(final))',
+              '        self.set_status("Search completed", len(final))',
+              'status text',
+          )
+
+          replace_once(
+              '    def _start_search(self, container, all_for_order=False):\n'
+              '        if self.busy:\n'
+              '            return\n'
+              '        if not container:',
+              '    def _start_search(self, container, all_for_order=False):\n'
+              '        if self.busy:\n'
+              '            return\n'
+              '\n'
+              '        # Clear previous results before starting a new lookup so stale data cannot be printed.\n'
+              '        self.current_data = pd.DataFrame()\n'
+              '        self.tree.delete(*self.tree.get_children())\n'
+              '        self._set_empty_state(None)\n'
+              '\n'
+              '        if not container:',
+              'clear stale data before search',
+          )
+
+          replace_once(
+              '    def _search_error(self, error):\n'
+              '        self._set_busy(False)\n'
+              '        self.set_status("Excel error")',
+              '    def _search_error(self, error):\n'
+              '        self.current_data = pd.DataFrame()\n'
+              '        self.tree.delete(*self.tree.get_children())\n'
+              '        self._set_empty_state("Unable to load data")\n'
+              '        self._set_busy(False)\n'
+              '        self.set_status("Excel error")',
+              'clear stale data on Excel error',
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Validate Python syntax
+        run: python -m py_compile "pack data/2.5.PY"
+
+      - name: Commit fixes and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-pack-fixes.yml
+          git add "pack data/2.5.PY"
+          git diff --cached --check
+          git commit -m "Fix pack content search safety and PO fallback"
+          git push
